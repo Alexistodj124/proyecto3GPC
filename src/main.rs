@@ -77,6 +77,14 @@ fn create_model_matrix(translation: Vec3, scale: f32, rotation: Vec3) -> Mat4 {
     transform_matrix * rotation_matrix
 }
 
+fn create_orbit_matrix(center: Vec3, radius: f32, speed: f32, time: f32) -> Mat4 {
+    let angle = time * speed;
+    let x = center.x + radius * angle.cos();
+    let y = center.y; 
+    let z = center.z + radius * angle.sin();
+    Mat4::new_translation(&Vec3::new(x, y, z))
+}
+
 fn create_view_matrix(eye: Vec3, center: Vec3, up: Vec3) -> Mat4 {
     look_at(&eye, &center, &up)
 }
@@ -99,15 +107,13 @@ fn create_viewport_matrix(width: f32, height: f32) -> Mat4 {
     )
 }
 
-fn render(framebuffer: &mut Framebuffer, uniforms: &Uniforms, vertex_array: &[Vertex], sphere_index: usize) {
-    // Vertex Shader
+pub fn render(framebuffer: &mut Framebuffer, uniforms: &Uniforms, vertex_array: &[Vertex], sphere_index: usize) {
     let mut transformed_vertices = Vec::with_capacity(vertex_array.len());
     for vertex in vertex_array {
         let transformed = vertex_shader(vertex, uniforms);
         transformed_vertices.push(transformed);
     }
 
-    // Primitive Assembly
     let mut triangles = Vec::new();
     for i in (0..transformed_vertices.len()).step_by(3) {
         if i + 2 < transformed_vertices.len() {
@@ -119,13 +125,11 @@ fn render(framebuffer: &mut Framebuffer, uniforms: &Uniforms, vertex_array: &[Ve
         }
     }
 
-    // Rasterization
     let mut fragments = Vec::new();
     for tri in &triangles {
         fragments.extend(triangle(&tri[0], &tri[1], &tri[2]));
     }
 
-    // Fragment Processing
     for fragment in fragments {
         let x = fragment.position.x as usize;
         let y = fragment.position.y as usize;
@@ -152,36 +156,31 @@ fn main() {
         window_width,
         window_height,
         WindowOptions::default(),
-    )
-    .unwrap();
+    ).unwrap();
 
     window.set_position(500, 500);
     window.update();
 
     framebuffer.set_background_color(0x333355);
 
-    // Parámetros de posición y escala para las 7 esferas
+    
+    let mut camera = Camera::new(
+        Vec3::new(0.0, 3.0, 5.0),  
+        Vec3::new(0.0, 0.0, 0.0),  
+        Vec3::new(0.0, 1.0, 0.0),  
+    );
     let sphere_params = [
-        (Vec3::new(-2.0, 0.0, 0.0), 0.5),  // Esfera 1
-        (Vec3::new(2.0, 0.0, 0.0), 0.5),   // Esfera 2
-        (Vec3::new(0.0, 2.0, 0.0), 0.5),   // Esfera 3
-        (Vec3::new(0.0, -2.0, 0.0), 0.5),  // Esfera 4
-        (Vec3::new(1.5, 1.5, 0.0), 0.5),   // Esfera 5
-        (Vec3::new(-1.5, 1.5, 0.0), 0.5),  // Esfera 6
-        (Vec3::new(0.0, 0.0, 0.0), 0.7)    // Esfera central
+        (Vec3::new(0.0, 0.0, 0.0), 0.7, 0.0, 0.0),  
+        (Vec3::new(-2.0, 0.0, 0.0), 0.5, 0.2, 0.0), 
+        (Vec3::new(2.0, 0.0, 0.0), 0.5, 0.2, 1.0),  
+        (Vec3::new(0.0, 2.0, 0.0), 0.5, 0.2, 2.0),  
+        (Vec3::new(0.0, -2.0, 0.0), 0.5, 0.2, 3.0), 
+        (Vec3::new(1.5, 1.5, 0.0), 0.5, 0.2, 4.0),  
+        (Vec3::new(-1.5, -1.5, 0.0), 0.5, 0.2, 5.0), 
     ];
 
-    let rotation = Vec3::new(0.0, 0.0, 0.0);
-
-    // Camera parameters
-    let mut camera = Camera::new(
-        Vec3::new(0.0, 0.0, 5.0),
-        Vec3::new(0.0, 0.0, 0.0),
-        Vec3::new(0.0, 1.0, 0.0)
-    );
-
     let obj = Obj::load("assets/models/sphere.obj").expect("Failed to load obj");
-    let vertex_arrays = obj.get_vertex_array(); 
+    let vertex_arrays = obj.get_vertex_array();
     let mut time = 0;
 
     while window.is_open() {
@@ -189,26 +188,59 @@ fn main() {
             break;
         }
 
+        
         time += 1;
 
-        handle_input(&window, &mut camera);
+        
+        if window.is_key_down(Key::Left) {
+            camera.orbit(PI / 50.0, 0.0); 
+        }
+        if window.is_key_down(Key::Right) {
+            camera.orbit(-PI / 50.0, 0.0); 
+        }
+        if window.is_key_down(Key::Up) {
+            camera.orbit(0.0, -PI / 50.0); 
+        }
+        if window.is_key_down(Key::Down) {
+            camera.orbit(0.0, PI / 50.0); 
+        }
+        if window.is_key_down(Key::W) {
+            camera.zoom(0.1); 
+        }
+        if window.is_key_down(Key::S) {
+            camera.zoom(-0.1); 
+        }
 
         framebuffer.clear();
 
-        let view_matrix = create_view_matrix(camera.eye, camera.center, camera.up);
+        let view_matrix = nalgebra_glm::look_at(
+            &camera.eye,
+            &camera.center,
+            &camera.up,
+        );
         let projection_matrix = create_perspective_matrix(window_width as f32, window_height as f32);
         let viewport_matrix = create_viewport_matrix(framebuffer_width as f32, framebuffer_height as f32);
 
-        // Render cada esfera con su shader único
-        for (i, (position, scale)) in sphere_params.iter().enumerate() {
-            let model_matrix = create_model_matrix(*position, *scale, rotation);
-            let uniforms = Uniforms { 
-                model_matrix, 
-                view_matrix, 
-                projection_matrix, 
+        
+        for (i, (position, scale, speed, phase)) in sphere_params.iter().enumerate() {
+            let orbit_radius = position.magnitude();
+            let orbit_angle = time as f32 * speed * 0.01 + phase;
+
+            let orbit_position = Vec3::new(
+                orbit_radius * orbit_angle.cos(),
+                orbit_radius * orbit_angle.sin(),
+                position.z,
+            );
+
+            let model_matrix = create_model_matrix(orbit_position, *scale, Vec3::zeros());
+
+            let uniforms = Uniforms {
+                model_matrix,
+                view_matrix,
+                projection_matrix,
                 viewport_matrix,
                 time,
-                noise: create_noise()
+                noise: create_noise(),
             };
 
             render(&mut framebuffer, &uniforms, &vertex_arrays, i);
@@ -219,51 +251,5 @@ fn main() {
             .unwrap();
 
         std::thread::sleep(frame_delay);
-    }
-}
-
-fn handle_input(window: &Window, camera: &mut Camera) {
-    let movement_speed = 1.0;
-    let rotation_speed = PI/50.0;
-    let zoom_speed = 0.1;
-   
-    //  camera orbit controls
-    if window.is_key_down(Key::Left) {
-      camera.orbit(rotation_speed, 0.0);
-    }
-    if window.is_key_down(Key::Right) {
-      camera.orbit(-rotation_speed, 0.0);
-    }
-    if window.is_key_down(Key::W) {
-      camera.orbit(0.0, -rotation_speed);
-    }
-    if window.is_key_down(Key::S) {
-      camera.orbit(0.0, rotation_speed);
-    }
-
-    // Camera movement controls
-    let mut movement = Vec3::new(0.0, 0.0, 0.0);
-    if window.is_key_down(Key::A) {
-      movement.x -= movement_speed;
-    }
-    if window.is_key_down(Key::D) {
-      movement.x += movement_speed;
-    }
-    if window.is_key_down(Key::Q) {
-      movement.y += movement_speed;
-    }
-    if window.is_key_down(Key::E) {
-      movement.y -= movement_speed;
-    }
-    if movement.magnitude() > 0.0 {
-      camera.move_center(movement);
-    }
-
-    // Camera zoom controls
-    if window.is_key_down(Key::Up) {
-      camera.zoom(zoom_speed);
-    }
-    if window.is_key_down(Key::Down) {
-      camera.zoom(-zoom_speed);
     }
 }
